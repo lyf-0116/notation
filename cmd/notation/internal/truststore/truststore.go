@@ -144,6 +144,9 @@ func showCert(cert *x509.Certificate) {
 // DeleteAllCerts deletes all certificate files from the trust store
 // under dir truststore/x509/storeType/namedStore
 func DeleteAllCerts(storeType, namedStore string, confirmed bool) error {
+	if err := validateTrustStoreIdentity(storeType, namedStore); err != nil {
+		return err
+	}
 	path, err := dir.ConfigFS().SysPath(dir.TrustStoreDir, "x509", storeType, namedStore)
 	if err != nil {
 		return err
@@ -171,6 +174,16 @@ func DeleteAllCerts(storeType, namedStore string, confirmed bool) error {
 // DeleteCert deletes a specific certificate file from the
 // trust store, namely truststore/x509/storeType/namedStore/cert
 func DeleteCert(storeType, namedStore, cert string, confirmed bool) error {
+	if err := validateTrustStoreIdentity(storeType, namedStore); err != nil {
+		return err
+	}
+	if cert == "" || filepath.IsAbs(cert) || !IsValidFileName(filepath.Base(cert)) {
+		return errors.New("certificate file name needs to follow [a-zA-Z0-9_.-]+ format")
+	}
+	trustStorePath, err := dir.ConfigFS().SysPath(dir.TrustStoreDir, "x509", storeType, namedStore)
+	if err != nil {
+		return err
+	}
 	path, err := dir.ConfigFS().SysPath(dir.TrustStoreDir, "x509", storeType, namedStore, cert)
 	if err != nil {
 		return err
@@ -186,25 +199,66 @@ func DeleteCert(storeType, namedStore, cert string, confirmed bool) error {
 	if _, err := os.Stat(path); err != nil {
 		return err
 	}
+	if err := ensurePathWithinTrustStore(trustStorePath, path); err != nil {
+		return err
+	}
 	if err = os.Remove(path); err != nil {
 		return err
 	}
 
 	// remove the trust store directory if empty
 	storePath := filepath.Dir(path)
-	empty, err := osutil.IsDirEmpty(storePath)
-	if err != nil {
-		// in this case, empty is always false
-		fmt.Fprintf(os.Stderr, "Warning: failed to check if the trust store directory %s is empty: %v\n", storePath, err)
-	}
-	if empty {
-		if err := os.Remove(storePath); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to remove the empty trust store directory %s: %v\n", storePath, err)
+	if err := ensurePathWithinTrustStore(trustStorePath, storePath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: refusing to clean up trust store directory %s: %v\n", storePath, err)
+	} else {
+		empty, err := osutil.IsDirEmpty(storePath)
+		if err != nil {
+			// in this case, empty is always false
+			fmt.Fprintf(os.Stderr, "Warning: failed to check if the trust store directory %s is empty: %v\n", storePath, err)
+		}
+		if empty {
+			if err := os.Remove(storePath); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to remove the empty trust store directory %s: %v\n", storePath, err)
+			}
 		}
 	}
 
 	// write out on success
 	fmt.Printf("Successfully deleted %s from trust store %s of type %s\n", cert, namedStore, storeType)
+	return nil
+}
+
+func validateTrustStoreIdentity(storeType, namedStore string) error {
+	if storeType == "" {
+		return errors.New("store type cannot be empty")
+	}
+	if !IsValidStoreType(storeType) {
+		return fmt.Errorf("unsupported store type: %s", storeType)
+	}
+	if !IsValidFileName(namedStore) {
+		return errors.New("named store name needs to follow [a-zA-Z0-9_.-]+ format")
+	}
+	return nil
+}
+
+// ensurePathWithinTrustStore resolves symlinks before checking containment so
+// ".." segments and symlinked directories cannot escape the trust store.
+func ensurePathWithinTrustStore(trustStorePath, path string) error {
+	realTrustStorePath, err := filepath.EvalSymlinks(trustStorePath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve trust store path %q: %w", trustStorePath, err)
+	}
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("failed to resolve certificate path %q: %w", path, err)
+	}
+	relativePath, err := filepath.Rel(realTrustStorePath, realPath)
+	if err != nil {
+		return fmt.Errorf("failed to check certificate path %q: %w", path, err)
+	}
+	if relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) || filepath.IsAbs(relativePath) {
+		return fmt.Errorf("certificate path %q is outside the trust store %q", path, trustStorePath)
+	}
 	return nil
 }
 
@@ -226,7 +280,10 @@ func IsValidStoreType(storeType string) bool {
 	return false
 }
 
-// IsValidFileName checks if a file name is cross-platform compatible
+var validFileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+
+// IsValidFileName checks if a file name is cross-platform compatible. The
+// special directory names "." and ".." are not file names.
 func IsValidFileName(fileName string) bool {
-	return regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(fileName)
+	return fileName != "." && fileName != ".." && validFileNamePattern.MatchString(fileName)
 }

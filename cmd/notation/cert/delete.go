@@ -16,6 +16,7 @@ package cert
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/notaryproject/notation/v2/cmd/notation/internal/truststore"
 	"github.com/spf13/cobra"
@@ -101,6 +102,9 @@ func deleteCerts(opts *certDeleteOpts) error {
 	cert := opts.cert
 	if cert == "" {
 		return errors.New("to delete a specific certificate, certificate fileName cannot be empty")
+	}
+	if filepath.IsAbs(cert) || !truststore.IsValidFileName(filepath.Base(cert)) {
+		return errors.New("certificate file name needs to follow [a-zA-Z0-9_.-]+ format")
 	}
 	err := truststore.DeleteCert(storeType, namedStore, cert, opts.confirmed)
 	if err != nil {
