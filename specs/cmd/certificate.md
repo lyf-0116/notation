@@ -74,6 +74,16 @@ Flags:
   -t, --type string    specify trust store type, options: ca, signingAuthority, tsa
 ```
 
+Before a certificate is added, it is validated against the target trust store type:
+
+* `ca`: the certificate must set the CA bit in basic constraints and include the `keyCertSign` key usage.
+* `signingAuthority`: the certificate must be self-signed and self-issued, and must not set the CA bit.
+* `tsa`: the certificate must include the `timeStamping` extended key usage.
+
+Duplicate certificates are detected by the SHA-256 thumbprint of the DER-encoded certificate, not by the source file name. Adding the same certificate under a different file name is rejected, while a different certificate that happens to share the file name is stored under a unique file name.
+
+When the input file contains multiple certificates, every certificate is validated independently and the file is split into one stored file per certificate (`<name>_<index>.<ext>`). If any certificate fails validation or is a duplicate, the whole input file is rejected and nothing is written. These checks only apply to certificates being newly added; certificates already present in an existing trust store are not re-validated.
+
 ### notation certificate list
 
 ```text

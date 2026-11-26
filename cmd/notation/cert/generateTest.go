@@ -17,9 +17,11 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/notaryproject/notation-core-go/testhelper"
@@ -160,8 +162,39 @@ func generateCertPEM(rsaCertTuple *testhelper.RSACertTuple) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rsaCertTuple.Cert.Raw})
 }
 
-// generateTestCert generates a self-signed non-CA certificate
+// generateSelfSignedCert generates a self-signed CA certificate so that it
+// can be added to the "ca" type of the trust store
 func generateSelfSignedCert(privateKey *rsa.PrivateKey, name string) (testhelper.RSACertTuple, []byte, error) {
-	rsaCertTuple := testhelper.GetRSASelfSignedCertTupleWithPK(privateKey, name)
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return testhelper.RSACertTuple{}, nil, err
+	}
+	template := &x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"Notary"},
+			Locality:     []string{"Seattle"},
+			Province:     []string{"WA"},
+			Country:      []string{"US"},
+			CommonName:   name,
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(1, 0, 0),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return testhelper.RSACertTuple{}, nil, err
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		return testhelper.RSACertTuple{}, nil, err
+	}
+	rsaCertTuple := testhelper.RSACertTuple{
+		Cert:       cert,
+		PrivateKey: privateKey,
+	}
 	return rsaCertTuple, generateCertPEM(&rsaCertTuple), nil
 }
